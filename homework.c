@@ -10,11 +10,13 @@ void getArgs(int argc, char **argv, char **in, char **out, int *steps)
 		printf("Not enough paramters:  ./homework IN_FILENAME OUT_FILENAME NUM_STEPS\n");
 		exit(1);
 	}
-	(*in) = (char *)malloc(strlen(argv[1])* sizeof(char));
+	(*in) = (char *)malloc((strlen(argv[1]) + 1)* sizeof(char));
     memcpy((*in), argv[1], strlen(argv[1]));
+    (*in)[strlen(argv[1])] = '\0';
 
-    (*out) = (char *)malloc(strlen(argv[2])* sizeof(char));
+    (*out) = (char *)malloc((strlen(argv[2]) + 1)* sizeof(char));
     memcpy((*out), argv[2], strlen(argv[2]));
+    (*out)[strlen(argv[2])] = '\0';
 
     (*steps) = atoi(argv[3]);
 }
@@ -84,12 +86,14 @@ int writeMatrixToFile(char* out, int **matrix, int rows, int cols)
 
     if (fprintf(file, "%d ", rows) < 0)
     {
-        printf("Ops! Something went wrong1!\n");
+        printf("Error: Failed to write rows dimension to file.\n");
+        exit(1);
     }
 
     if (fprintf(file, "%d\n", cols) < 0)
     {
-        printf("Ops! Something went wrong2!\n");
+        printf("Error: Failed to write cols dimension to file.\n");
+        exit(1);
     }
 
     for (int i = 0; i < rows; i++)
@@ -98,7 +102,8 @@ int writeMatrixToFile(char* out, int **matrix, int rows, int cols)
         {
             if (fprintf(file, "%d ", matrix[i][j]) < 2)
             {
-                printf("Ops! Something went wrong!\n");
+                printf("Error: Failed to write element at position (%d, %d).\n", i, j);
+                exit(1);
             }
         }
         fprintf(file, "\n");
@@ -108,7 +113,7 @@ int writeMatrixToFile(char* out, int **matrix, int rows, int cols)
     return 0;
 }
 
-void divide_matrix(int rows, int cols, int nProcesses, int** sendcounts, int** displs, int** local_rows, int** starts)
+void divideMatrix(int rows, int cols, int nProcesses, int** sendcounts, int** displs, int** local_rows, int** starts)
 {
     // This function calculates the number of rows for each process
     int chunk_size = rows / nProcesses;
@@ -157,7 +162,6 @@ int main(int argc, char **argv)
 
     int **matrix;
     int rows, cols;
-    MPI_Status status;
     MPI_Request request;
 	int* sendcounts = (int*)malloc(nProcesses * sizeof(int));
 	int* displs = (int*)malloc(nProcesses * sizeof(int));
@@ -170,7 +174,7 @@ int main(int argc, char **argv)
         int *local_rows = (int *)calloc(nProcesses, sizeof(int));
         int *starts = (int *)calloc(nProcesses, sizeof(int));
 
-        divide_matrix(rows,cols,nProcesses,&sendcounts,&displs,&local_rows,&starts);
+        divideMatrix(rows,cols,nProcesses,&sendcounts,&displs,&local_rows,&starts);
 
         for (int i = 0; i < nProcesses; i++)
         {
@@ -183,8 +187,8 @@ int main(int argc, char **argv)
     int start;
 
     // recives the individual data
-    MPI_Recv(&local_row, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
-    MPI_Recv(&start, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, &status);
+    MPI_Recv(&local_row, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(&start, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
     // The needed info is broadcasted to all processes
     MPI_Bcast(&rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -204,10 +208,10 @@ int main(int argc, char **argv)
     int** new_matrix;
     allocateContinuousMatrix(&new_matrix, rows, cols);
 
+    // This loop calculates the next step of the matrix
     int k = 0;
     while(k < steps)
     {
-        //printf("Process %d \n",rank);
         for(int i = start; i < start + local_row; i++)
         {
             for(int j = 0; j < cols; j++)
@@ -248,24 +252,23 @@ int main(int argc, char **argv)
         
         if (nProcesses > 1)
         {
-            // if there are more than one process then each process will update the marginal lines of its section with the lines calculated by its neighbours
+            // The processes send the needed rows between one another
             if (rank > 0)
             {
                 MPI_Isend(new_matrix[start], cols, MPI_INT, rank - 1, 9, MPI_COMM_WORLD, &request);
             }
             if (rank < nProcesses - 1)
             {
-                printf("%d   %d\n",rank,start + local_row -1);
                 MPI_Isend(new_matrix[start + local_row - 1], cols, MPI_INT, rank + 1, 10, MPI_COMM_WORLD, &request);
             }
 
             if (rank > 0)
             {
-                MPI_Recv(matrix[start - 1], cols, MPI_INT, rank - 1, 10, MPI_COMM_WORLD, &status);
+                MPI_Recv(matrix[start - 1], cols, MPI_INT, rank - 1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
             if (rank < nProcesses - 1)
             {
-                MPI_Recv(matrix[start + local_row], cols, MPI_INT, rank + 1, 9, MPI_COMM_WORLD, &status);
+                MPI_Recv(matrix[start + local_row], cols, MPI_INT, rank + 1, 9, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
             MPI_Barrier(MPI_COMM_WORLD);
         }
@@ -273,14 +276,14 @@ int main(int argc, char **argv)
         
     }
 
-    //printf("%d    %d\n",rank,local_row);
-    
+    // Process 0 gathers the matrix from all processes and prints it to the output file    
     MPI_Gatherv(*matrix + start*cols, sendcounts[rank], MPI_INT, *matrix, sendcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
 
     if(rank==0)
     {
         writeMatrixToFile(out,matrix,rows,cols);
     }
+
 	MPI_Finalize();
 	return 0;
 }
